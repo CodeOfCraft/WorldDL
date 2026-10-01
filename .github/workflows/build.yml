@@ -46,6 +46,17 @@ jobs:
       - run: |
           xmake -v -y
 
+      - name: Validate loader dependency metadata
+        run: |
+          $package = Get-Content tooth.json -Raw | ConvertFrom-Json
+          $manifest = Get-Content bin/WorldDL/manifest.json -Raw | ConvertFrom-Json
+          if ($manifest.dependencies.name -contains 'LeviLamina') {
+            throw 'The preloaded LeviLamina loader must not be an ordinary mod dependency.'
+          }
+          if ($package.variants[0].dependencies.'github.com/LiteLDev/LeviLamina#client' -cne '26.51.6') {
+            throw 'The package must require the supported LeviLamina client version.'
+          }
+
       - name: Configure tests
         run: cmake -S tests -B build/tests -A x64
 

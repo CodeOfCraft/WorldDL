@@ -5,8 +5,5 @@
     "type": "native",
     "platform": "${modPlatform}",
     "author": "CodeOfCraft",
-    "description": "Save received Bedrock client chunks as a local world",
-    "dependencies": [
-        { "name": "LeviLamina", "version": "26.51.6" }
-    ]
+    "description": "Save received Bedrock client chunks as a local world"
 }

@@ -33,9 +33,13 @@ Follow the [official release guide](https://lamina.levimc.org/zh/developer_guide
 3. Build, run the automated checks, and complete the in-game validation described in the README.
 4. Create a GitHub release from the intended commit using a tag such as `v0.1.0`. The leading `v` and semantic version are required for Bedrinth/LeviLauncher indexing. Actions builds, tests, packages, and uploads the archive.
 
+Declare the LeviLamina client requirement in `tooth.json`. LeviLamina is a preload-native loader and is excluded from its ordinary mod dependency graph; adding it to `manifest.json` dependencies prevents WorldDL from loading.
+
 参照[官方发布指南](https://lamina.levimc.org/zh/developer_guides/tutorials/create_your_first_mod/#发布你的模组)：
 
 1. 同步 `tooth.json`、`xmake.lua` 的 `modVersion` 及启动日志中的版本。`manifest.json` 是构建模板，其中 `${modVersion}` 会在打包时替换。
 2. 更新 `CHANGELOG.md` 与双语 README。核对 `tooth` 仓库标识及 logo 地址，下载 URL 的文件名应与工作流的 `WorldDL-client-windows-x64.zip` 一致。
 3. 完成构建、自动化检查和 README 中的游戏内验证。
 4. 从目标提交创建 GitHub Release，标签使用 `v0.1.0` 等格式。Bedrinth/LeviLauncher 收录要求以 `v` 开头且符合语义化版本。Actions 会构建、测试、打包并上传压缩包。
+
+LeviLamina 客户端版本要求应写入 `tooth.json`。LeviLamina 是 preload-native 加载器，不参与普通模组依赖图；将它加入 `manifest.json` 的 dependencies 会阻止 WorldDL 加载。

@@ -17,3 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Configure air-only Overworld generation for undownloaded terrain.
 - Retry the final capture when the write queue is full.
 - Add English and Simplified Chinese documentation, contribution guidelines and dependency notices.
+
+### Fixed
+
+- Remove the ordinary-mod dependency on the preloaded LeviLamina loader, which prevented WorldDL from loading. Keep the client loader requirement in tooth.json.
