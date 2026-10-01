@@ -1,0 +1,65 @@
+# Local toolchains, dependency caches, and generated builds
+/.tools/
+/.xmake/
+/build/
+/bin/
+/test-output/
+/cmake-build-*/
+compile_commands.json
+
+# C++ compiler and linker output
+*.obj
+*.o
+*.pch
+*.gch
+*.lib
+*.a
+*.dll
+*.so
+*.dylib
+*.exe
+*.pdb
+*.ilk
+*.exp
+*.idb
+*.ipdb
+*.iobj
+*.d
+*.tlog
+*.log
+
+# CMake and Ninja output outside build/
+CMakeCache.txt
+CMakeFiles/
+Testing/
+cmake_install.cmake
+CTestTestfile.cmake
+install_manifest.txt
+_deps/
+.ninja_deps
+.ninja_log
+
+# Local editor settings; keep portable shared configurations
+/.vs/
+/.idea/
+/.vscode/*
+!/.vscode/launch.json
+!/.vscode/tasks.json
+!/.vscode/extensions.json
+*.code-workspace
+*.user
+*.suo
+
+# Runtime worlds and exported archives
+/mods/
+*.mcworld
+
+# Local credentials and operating system files
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+Thumbs.db
+.DS_Store
+*~

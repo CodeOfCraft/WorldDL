@@ -1,0 +1,24 @@
+# Normalize source and documentation across Windows and CI.
+* text=auto
+.gitattributes text eol=lf
+.gitignore text eol=lf
+.clang* text eol=lf
+*.cpp text eol=lf diff=cpp
+*.h text eol=lf diff=cpp
+*.lua text eol=lf
+*.md text eol=lf diff=markdown
+*.txt text eol=lf
+LICENSE text eol=lf
+*.json text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.ps1 text eol=crlf
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.sh text eol=lf
+*.png binary
+*.dll binary
+*.exe binary
+*.pdb binary
+*.zip binary
+*.mcworld binary

@@ -1,0 +1,66 @@
+name: Bug Report / 错误反馈
+description: Report a WorldDL client, export or import problem / 反馈客户端、导出或导入问题
+title: "[Bug] "
+body:
+  - type: textarea
+    attributes:
+      label: Describe the bug
+      description: A clear and concise description of what the bug is.
+    validations:
+      required: true
+
+  - type: textarea
+    attributes:
+      label: To Reproduce
+      description: Steps to reproduce the behavior.
+    validations:
+      required: true
+
+  - type: textarea
+    attributes:
+      label: Expected behavior
+      description: A clear and concise description of what you expected to happen.
+    validations:
+      required: true
+
+  - type: textarea
+    attributes:
+      label: Screenshots
+      description: If applicable, add screenshots to help explain your problem.
+    
+  - type: input
+    attributes:
+      label: Windows Version / Windows 版本
+      description: Include your Windows version and architecture.
+
+  - type: input
+    attributes:
+      label: Minecraft Bedrock Client Version / 基岩版客户端版本
+      description: "Supported client: 1.26.51. This mod does not run on BDS."
+    validations:
+      required: true
+
+  - type: input
+    attributes:
+      label: LeviLamina Version
+      description: "Supported version: 26.51.6, client variant."
+    validations:
+      required: true
+
+  - type: input
+    attributes:
+      label: WorldDL Version / 模组版本
+      description: Include the release version or commit used.
+    validations:
+      required: true
+
+  - type: textarea
+    attributes:
+      label: Logs / 日志
+      description: Relevant errors and /wdl status output; remove personal and server information.
+      render: text
+
+  - type: textarea
+    attributes:
+      label: Additional context
+      description: Add any other context about the problem here.

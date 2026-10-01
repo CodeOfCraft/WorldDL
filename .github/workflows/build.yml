@@ -1,0 +1,65 @@
+name: Build and Test
+
+on:
+  pull_request:
+  push:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    env:
+      GIT_CONFIG_COUNT: 1
+      GIT_CONFIG_KEY_0: core.longpaths
+      GIT_CONFIG_VALUE_0: 'true'
+    strategy:
+      matrix:
+        target_type:
+          - client
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: xmake-io/github-action-setup-xmake@v1
+      
+      - uses: actions/cache@v6
+        with:
+          path: |
+            ~/AppData/Local/.xmake
+          key: xmake-${{ hashFiles('xmake.lua') }}
+          restore-keys: |
+            xmake-
+
+      - name: Setup LLVM
+        uses: ZhongRuoyu/setup-llvm@v0
+        with:
+          llvm-version: 22
+
+      - run: |
+          xmake repo -u
+
+      - run: |
+          xmake f -a x64 -m release -p windows -v --target_type=${{ matrix.target_type }} -y
+
+      - run: |
+          xmake -v -y
+
+      - name: Configure tests
+        run: cmake -S tests -B build/tests -A x64
+
+      - name: Build tests
+        run: cmake --build build/tests --config Release --parallel
+
+      - name: Test world storage and generation
+        run: ctest --test-dir build/tests -C Release --output-on-failure
+
+      - name: Test world export
+        run: pwsh -File tests/ExportWorldTests.ps1
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ${{ github.event.repository.name }}-${{ github.sha }}-${{ matrix.target_type }}-windows-x64
+          path: bin/WorldDL/
+          if-no-files-found: error

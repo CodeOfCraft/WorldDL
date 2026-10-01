@@ -1,0 +1,137 @@
+name: Release
+
+on:
+  release:
+    types:
+      - published
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    env:
+      GIT_CONFIG_COUNT: 1
+      GIT_CONFIG_KEY_0: core.longpaths
+      GIT_CONFIG_VALUE_0: 'true'
+    strategy:
+      matrix:
+        target_type:
+          - client
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Validate release version
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          $package = Get-Content tooth.json -Raw | ConvertFrom-Json
+          if ($env:RELEASE_TAG -cne "v$($package.version)") {
+            throw "Release tag must be v$($package.version)."
+          }
+          $build = Get-Content xmake.lua -Raw
+          if ($build -notmatch ('modVersion\s*=\s*"' + [regex]::Escape($package.version) + '"')) {
+            throw 'xmake modVersion must match tooth.json.'
+          }
+
+      - uses: xmake-io/github-action-setup-xmake@v1
+
+      - uses: actions/cache@v6
+        with:
+          path: |
+            ~/AppData/Local/.xmake
+          key: xmake-${{ hashFiles('xmake.lua') }}
+          restore-keys: |
+            xmake-
+
+      - name: Setup LLVM
+        uses: ZhongRuoyu/setup-llvm@v0
+        with:
+          llvm-version: 22
+
+      - run: |
+          xmake repo -u
+
+      - run: |
+          xmake f -a x64 -m release -p windows --target_type=${{ matrix.target_type }} -y
+
+      - run: |
+          xmake -w -y
+
+      - name: Validate built manifest
+        run: |
+          $package = Get-Content tooth.json -Raw | ConvertFrom-Json
+          $manifest = Get-Content bin/WorldDL/manifest.json -Raw | ConvertFrom-Json
+          if ($manifest.version -cne $package.version -or $manifest.platform -cne 'client') {
+            throw 'Built manifest must match the client package version.'
+          }
+
+      - name: Configure tests
+        run: cmake -S tests -B build/tests -A x64
+
+      - name: Build tests
+        run: cmake --build build/tests --config Release --parallel
+
+      - name: Test world storage and generation
+        run: ctest --test-dir build/tests -C Release --output-on-failure
+
+      - name: Test world export
+        run: pwsh -File tests/ExportWorldTests.ps1
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ${{ github.event.repository.name }}-${{ github.sha }}-${{ matrix.target_type }}-windows-x64
+          path: bin/WorldDL/
+          if-no-files-found: error
+
+  update-release-notes:
+    needs: build
+    permissions:
+      contents: write
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - id: extract-release-notes
+        uses: ffurrer2/extract-release-notes@v3
+
+      - uses: softprops/action-gh-release@v3
+        with:
+          body: |
+            ${{ steps.extract-release-notes.outputs.release_notes }}
+
+  upload-to-release:
+    needs:
+      - build
+      - update-release-notes
+    permissions:
+      contents: write
+    strategy:
+      matrix:
+        target_type:
+          - client
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: ${{ github.event.repository.name }}-${{ github.sha }}-${{ matrix.target_type }}-windows-x64
+          path: artifact/WorldDL
+
+      - run: |
+          cp CHANGELOG.md LICENSE README.md README.zh-CN.md CONTRIBUTING.md NOTICE.md tooth.json logo.png artifact/
+          cp -r LICENSES artifact/
+          mkdir -p artifact/scripts
+          cp scripts/Export-World.ps1 artifact/scripts/
+
+      - run: |
+          zip -r ../WorldDL-client-windows-x64.zip .
+        working-directory: artifact
+
+      - uses: softprops/action-gh-release@v3
+        with:
+          files: |
+            WorldDL-client-windows-x64.zip
+          fail_on_unmatched_files: true
