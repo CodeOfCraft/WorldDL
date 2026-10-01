@@ -4,6 +4,8 @@
 
 [English](README.md) | 简体中文
 
+作者：[CodeOfCraft](https://github.com/CodeOfCraft)
+
 将客户端收到的区块保存为本地世界的 Windows x64 Minecraft 基岩版模组。基于 [LeviLamina](https://github.com/LiteLDev/LeviLamina) 及其[官方模组模板](https://github.com/LiteLDev/levilamina-mod-template)。
 
 ## 兼容性

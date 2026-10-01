@@ -4,6 +4,8 @@
 
 English | [简体中文](README.zh-CN.md)
 
+Author: [CodeOfCraft](https://github.com/CodeOfCraft)
+
 A Windows x64 Minecraft Bedrock client mod that saves received chunks as a local world. Built with [LeviLamina](https://github.com/LiteLDev/LeviLamina), based on its [official mod template](https://github.com/LiteLDev/levilamina-mod-template).
 
 ## Compatibility
