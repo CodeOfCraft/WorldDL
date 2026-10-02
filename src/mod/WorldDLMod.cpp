@@ -2,7 +2,6 @@
 
 #include <algorithm>
 #include <chrono>
-#include <deque>
 #include <filesystem>
 #include <mutex>
 #include <unordered_map>
@@ -24,6 +23,7 @@
 #include "mc/world/level/chunk/LevelChunk.h"
 
 #include "world/ChunkCapture.h"
+#include "world/CaptureQueue.h"
 
 namespace worlddl {
 
@@ -31,7 +31,7 @@ LL_TYPE_INSTANCE_HOOK(WdlSubChunkHook, ll::memory::HookPriority::Normal, ClientL
                       &ClientLevel::$onSubChunkLoaded, void, ChunkSource& source, LevelChunk& chunk,
                       short index, bool visibilityChanged) {
     origin(source, chunk, index, visibilityChanged);
-    WorldDLMod::getInstance().capture(chunk);
+    WorldDLMod::getInstance().schedule(source, chunk);
 }
 
 LL_TYPE_INSTANCE_HOOK(WdlChunkDestroyHook, ll::memory::HookPriority::Normal, LevelChunk,
@@ -57,9 +57,11 @@ struct WorldDLMod::Impl {
     int ticks{};
     int scanIntervalTicks{20};
     int chunksPerTick{4};
+    std::chrono::microseconds captureBudget{2000};
     std::size_t queueLimit{256};
     std::unordered_map<std::string, std::size_t> hashes;
-    std::deque<std::weak_ptr<LevelChunk>> scan;
+    CaptureQueue<LevelChunk> loaded;
+    CaptureQueue<LevelChunk> scan;
     ll::event::ListenerPtr commandListener;
     ll::event::ListenerPtr tickListener;
     std::unique_ptr<ll::memory::HookRegistrar<WdlSubChunkHook, WdlChunkDestroyHook, WdlLeaveHook>> hooks;
@@ -75,7 +77,7 @@ struct WorldDLMod::Impl {
         for (int depth = 0; source && depth < 16; ++depth, source = source->mParent) {
             if (auto* chunks = source->getChunkMap()) {
                 for (auto const& [position, chunk] : *chunks) {
-                    scan.push_back(chunk);
+                    scan.push(chunk.lock());
                 }
                 break;
             }
@@ -85,12 +87,17 @@ struct WorldDLMod::Impl {
     void captureAll() {
         scan.clear();
         discover();
-        while (!scan.empty()) {
-            if (auto chunk = scan.front().lock()) {
-                mod.capture(*chunk);
-                writer->flush();
+        while (!loaded.empty()) {
+            if (auto chunk = loaded.pop()) {
+                scan.erase(chunk.get());
+                mod.capture(*chunk, true);
             }
-            scan.pop_front();
+        }
+        loaded.clear();
+        while (!scan.empty()) {
+            if (auto chunk = scan.pop()) {
+                mod.capture(*chunk, true);
+            }
         }
     }
 
@@ -107,6 +114,7 @@ struct WorldDLMod::Impl {
         }
         activeLevel = nullptr;
         hashes.clear();
+        loaded.clear();
         scan.clear();
     }
 
@@ -141,6 +149,7 @@ struct WorldDLMod::Impl {
             writer = std::make_unique<WorldWriter>(directory, name, metadata, queueLimit);
             activeLevel = client->getLevel();
             hashes.clear();
+            loaded.clear();
             scan.clear();
             captureErrorReported = false;
             ticks = scanIntervalTicks - 1;
@@ -157,7 +166,8 @@ struct WorldDLMod::Impl {
         auto const state = writer ? writer->status() : lastStatus;
         output.success(std::string(writer ? "Recording" : "Stopped") + ": "
                        + std::to_string(state.chunks) + " chunks, " + std::to_string(state.pending)
-                       + " queued, " + std::to_string(state.rejected) + " queue rejections.\n"
+                       + " queued, " + std::to_string(state.rejected) + " queue rejections, "
+                       + std::to_string(state.writes) + " writes in " + std::to_string(state.batches) + " batches.\n"
                        + state.directory.string());
         if (!state.error.empty()) {
             output.error("Storage error: " + state.error);
@@ -183,18 +193,7 @@ struct WorldDLMod::Impl {
                 output.error("No download is running.");
                 return;
             }
-            // Drain between captures so a large view cannot overrun the bounded queue.
-            scan.clear();
-            discover();
-            while (!scan.empty()) {
-                if (auto chunk = scan.front().lock()) {
-                    mod.capture(*chunk);
-                    if (!writer->flush()) {
-                        break;
-                    }
-                }
-                scan.pop_front();
-            }
+            captureAll();
             if (writer->flush()) {
                 output.success("WorldDL saved: " + writer->status().directory.string());
             } else {
@@ -207,7 +206,6 @@ struct WorldDLMod::Impl {
                 output.error("No download is running.");
                 return;
             }
-            writer->flush();
             captureAll();
             stop();
             if (lastStatus.error.empty()) {
@@ -238,11 +236,19 @@ struct WorldDLMod::Impl {
                 discover();
             }
         }
-        for (int count = 0; count < chunksPerTick && !scan.empty(); ++count) {
-            if (auto chunk = scan.front().lock()) {
+        if (state.pending >= queueLimit) {
+            return;
+        }
+        auto const deadline = std::chrono::steady_clock::now() + captureBudget;
+        for (int count = 0; count < chunksPerTick && (!loaded.empty() || !scan.empty()); ++count) {
+            if (std::chrono::steady_clock::now() >= deadline) {
+                break;
+            }
+            auto chunk = loaded.empty() ? scan.pop() : loaded.pop();
+            if (chunk) {
+                scan.erase(chunk.get());
                 mod.capture(*chunk);
             }
-            scan.pop_front();
         }
     }
 };
@@ -299,10 +305,32 @@ bool WorldDLMod::disable() {
 
 bool WorldDLMod::unload() { return disable(); }
 
+void WorldDLMod::schedule(ChunkSource& source, LevelChunk& chunk) noexcept {
+    std::lock_guard lock(mImpl->mutex);
+    if (!mImpl->enabled || !mImpl->writer || &chunk.mLevel != mImpl->activeLevel) {
+        return;
+    }
+    try {
+        auto owner = source.getExistingChunk(chunk.mPosition);
+        if (owner && owner.get() == &chunk) {
+            mImpl->loaded.push(owner);
+            mImpl->scan.erase(&chunk);
+        } else {
+            capture(chunk);
+        }
+    } catch (...) {
+        capture(chunk);
+    }
+}
+
 void WorldDLMod::capture(LevelChunk& chunk, bool ensureQueued) noexcept {
     std::lock_guard lock(mImpl->mutex);
     if (!mImpl->enabled || !mImpl->writer || &chunk.mLevel != mImpl->activeLevel) {
         return;
+    }
+    if (ensureQueued) {
+        mImpl->loaded.erase(&chunk);
+        mImpl->scan.erase(&chunk);
     }
     try {
         if (auto snapshot = captureChunk(chunk)) {
@@ -337,7 +365,6 @@ void WorldDLMod::leaving(Level& level) noexcept {
     std::lock_guard lock(mImpl->mutex);
     if (mImpl->writer && &level == mImpl->activeLevel) {
         try {
-            mImpl->writer->flush();
             mImpl->captureAll();
         } catch (std::exception const& error) {
             getSelf().getLogger().error("WorldDL final capture failed: {}", error.what());

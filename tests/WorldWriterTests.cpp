@@ -1,6 +1,7 @@
 #include "world/BedrockFormat.h"
 #include "world/WorldWriter.h"
 
+#include <atomic>
 #include <chrono>
 #include <filesystem>
 #include <fstream>
@@ -73,6 +74,9 @@ void storageTest(std::filesystem::path const& root) {
         submit({"nether", {{netherSubchunk, "nether"}}});
         require(writer.flush(), "Flush must wait until accepted writes are durable");
         require(writer.status().chunks == 402, "Status must count distinct columns rather than updates");
+        require(writer.status().pending == 0, "Flush must wait for every snapshot in a batch");
+        require(writer.status().batches > 0 && writer.status().batches <= writer.status().writes,
+                "Each durable batch must account for its saved snapshots");
         submit({"last", {{"last-key", "drained on stop"}}});
         writer.stop();
         require(!writer.submit({"stopped", {{"unused", "unused"}}}), "Stopped writer must reject submissions");
@@ -113,6 +117,66 @@ void storageTest(std::filesystem::path const& root) {
     require(invalidLimit, "A zero queue capacity must be rejected");
 }
 
+void batchTest(std::filesystem::path const& root) {
+    auto const directory = root / "batches";
+    constexpr int producers = 4;
+    constexpr int chunksPerProducer = 64;
+    constexpr int revisions = 8;
+    std::string const preservedKey = chunkKey(0, 0, 0, ChunkTag::SubChunk, std::int8_t{-4});
+    {
+        auto const started = std::chrono::steady_clock::now();
+        WorldWriter writer(directory, "Batch Test", levelDat(std::string("\x0a\0\0\0", 4)), 16);
+        std::atomic<bool> failed{};
+        std::vector<std::thread> threads;
+        for (int producer = 0; producer < producers; ++producer) {
+            threads.emplace_back([&, producer] {
+                for (int revision = 0; revision < revisions; ++revision) {
+                    for (int index = 0; index < chunksPerProducer; ++index) {
+                        auto identity = "chunk-" + std::to_string(producer) + "-" + std::to_string(index);
+                        ChunkSnapshot snapshot{identity, {{identity, std::string(32768, static_cast<char>('a' + revision))}}};
+                        if (producer == 0 && index == 0 && revision == 0) {
+                            snapshot.records.push_back({preservedKey, "retained partial subchunk"});
+                        }
+                        while (!writer.submit(std::move(snapshot))) {
+                            if (!writer.status().error.empty()) {
+                                failed = true;
+                                return;
+                            }
+                            std::this_thread::yield();
+                        }
+                    }
+                }
+            });
+        }
+        for (auto& thread : threads) {
+            thread.join();
+        }
+        require(!failed, "Concurrent producers must not encounter a batch write failure");
+        // Stop with a backlog: it must drain whole batches, including their final partial update.
+        writer.stop();
+        auto const state = writer.status();
+        require(state.error.empty() && state.pending == 0, "Stop must drain all queued and in-flight snapshots");
+        require(state.chunks == producers * chunksPerProducer, "Batch accounting must count distinct chunks");
+        auto const elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - started).count();
+        std::cout << "Batch workload: " << state.writes << " snapshot writes in " << state.batches
+                  << " durable commits, " << elapsed << " ms\n";
+    }
+    auto db = openDb(directory);
+    for (int producer = 0; producer < producers; ++producer) {
+        for (int index = 0; index < chunksPerProducer; ++index) {
+            auto identity = "chunk-" + std::to_string(producer) + "-" + std::to_string(index);
+            std::string value;
+            require(db->Get(leveldb::ReadOptions{}, identity, &value).ok(), "All batched records must survive reopening");
+            require(value == std::string(32768, static_cast<char>('a' + revisions - 1)),
+                    "Updates submitted while a batch is in flight must keep their latest revision");
+        }
+    }
+    std::string value;
+    require(db->Get(leveldb::ReadOptions{}, preservedKey, &value).ok() && value == "retained partial subchunk",
+            "Batches and partial updates must preserve omitted subchunks");
+}
+
 } // namespace
 
 int main() {
@@ -122,6 +186,7 @@ int main() {
         std::filesystem::create_directory(root);
         formatTest();
         storageTest(root);
+        batchTest(root);
         std::filesystem::remove_all(root);
         std::cout << "WorldDL format and storage tests passed\n";
         return 0;

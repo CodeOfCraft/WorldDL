@@ -30,6 +30,7 @@ struct WriterStatus {
     std::filesystem::path directory;
     std::size_t chunks{};
     std::size_t writes{};
+    std::size_t batches{};
     std::size_t pending{};
     std::size_t rejected{};
     std::string error;
@@ -62,8 +63,9 @@ private:
     std::map<std::string, ChunkSnapshot> mPending;
     std::set<std::string>           mSaved;
     std::size_t                     mWrites{};
+    std::size_t                     mBatches{};
     std::size_t                     mRejected{};
-    bool                            mBusy{};
+    std::size_t                     mInFlight{};
     bool                            mStopping{};
     std::string                     mError;
     std::thread                     mThread;

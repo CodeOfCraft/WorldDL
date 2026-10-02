@@ -4,6 +4,7 @@
 
 #include "ll/api/mod/NativeMod.h"
 
+class ChunkSource;
 class Level;
 class LevelChunk;
 
@@ -22,6 +23,7 @@ public:
     bool unload();
 
     void capture(LevelChunk& chunk, bool ensureQueued = false) noexcept;
+    void schedule(ChunkSource& source, LevelChunk& chunk) noexcept;
     void leaving(Level& level) noexcept;
 
 private:

@@ -1,6 +1,7 @@
 #include "world/WorldWriter.h"
 
 #include <algorithm>
+#include <chrono>
 #include <fstream>
 #include <stdexcept>
 
@@ -9,6 +10,10 @@
 
 namespace worlddl {
 namespace {
+
+constexpr std::size_t writeBatchLimit = 32;
+constexpr std::size_t writeBatchBytes = 4 * 1024 * 1024;
+constexpr auto writeBatchDelay = std::chrono::milliseconds{2};
 
 void writeFile(std::filesystem::path const& path, std::string const& data) {
     std::ofstream stream(path, std::ios::binary | std::ios::trunc);
@@ -80,7 +85,7 @@ bool WorldWriter::submit(ChunkSnapshot&& snapshot) {
 
 bool WorldWriter::flush() {
     std::unique_lock lock(mMutex);
-    mDrained.wait(lock, [&] { return (mPending.empty() && !mBusy) || !mError.empty(); });
+    mDrained.wait(lock, [&] { return (mPending.empty() && mInFlight == 0) || !mError.empty(); });
     return mError.empty();
 }
 
@@ -98,27 +103,42 @@ void WorldWriter::stop() {
 
 WriterStatus WorldWriter::status() const {
     std::lock_guard lock(mMutex);
-    return {mDirectory, mSaved.size(), mWrites, mPending.size() + (mBusy ? 1 : 0), mRejected, mError};
+    return {mDirectory, mSaved.size(), mWrites, mBatches, mPending.size() + mInFlight, mRejected, mError};
 }
 
 void WorldWriter::run() noexcept {
     try {
         for (;;) {
-            ChunkSnapshot snapshot;
+            std::vector<ChunkSnapshot> snapshots;
+            snapshots.reserve(writeBatchLimit);
             {
                 std::unique_lock lock(mMutex);
                 mReady.wait(lock, [&] { return mStopping || !mOrder.empty(); });
                 if (mOrder.empty()) {
                     break;
                 }
-                auto entry = mPending.extract(mOrder.front());
-                mOrder.pop_front();
-                snapshot = std::move(entry.mapped());
-                mBusy = true;
+                // A short window lets a burst share one durable LevelDB commit.
+                if (!mStopping && mOrder.size() < writeBatchLimit) {
+                    mReady.wait_for(lock, writeBatchDelay, [&] {
+                        return mStopping || mOrder.size() >= writeBatchLimit;
+                    });
+                }
+                std::size_t bytes = 0;
+                while (!mOrder.empty() && snapshots.size() < writeBatchLimit && bytes < writeBatchBytes) {
+                    auto entry = mPending.extract(mOrder.front());
+                    mOrder.pop_front();
+                    for (auto const& record : entry.mapped().records) {
+                        bytes += record.key.size() + record.value.size();
+                    }
+                    snapshots.push_back(std::move(entry.mapped()));
+                }
+                mInFlight = snapshots.size();
             }
             leveldb::WriteBatch batch;
-            for (auto const& record : snapshot.records) {
-                batch.Put(record.key, record.value);
+            for (auto const& snapshot : snapshots) {
+                for (auto const& record : snapshot.records) {
+                    batch.Put(record.key, record.value);
+                }
             }
             leveldb::WriteOptions options;
             options.sync = true;
@@ -128,20 +148,23 @@ void WorldWriter::run() noexcept {
             }
             {
                 std::lock_guard lock(mMutex);
-                mSaved.insert(snapshot.identity);
-                ++mWrites;
-                mBusy = false;
+                for (auto const& snapshot : snapshots) {
+                    mSaved.insert(snapshot.identity);
+                }
+                mWrites += snapshots.size();
+                ++mBatches;
+                mInFlight = 0;
             }
             mDrained.notify_all();
         }
     } catch (std::exception const& error) {
         std::lock_guard lock(mMutex);
         mError = error.what();
-        mBusy = false;
+        mInFlight = 0;
     } catch (...) {
         std::lock_guard lock(mMutex);
         mError = "Unknown LevelDB writer failure";
-        mBusy = false;
+        mInFlight = 0;
     }
     mDrained.notify_all();
 }

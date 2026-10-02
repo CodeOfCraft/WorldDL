@@ -53,15 +53,15 @@ The script checks the database lock and places world files at the archive root. 
 
 - Saves received subchunk blocks, extra block layers, biomes, heightmaps, and block entity NBT.
 - Keeps separate keys for the Overworld, Nether, and End, including negative coordinates and negative subchunk heights.
-- Captures on subchunk loading, before chunk destruction, and during periodic scans. Defaults: one scan every 20 ticks, up to 4 chunks per tick, and a queue limit of 256 snapshots.
+- Coalesces subchunk loading notifications and captures them on client ticks, with a final capture before chunk destruction and periodic scans every 20 ticks. Loaded notifications take priority. Normal capture processes up to 4 chunks per tick and checks a 2 ms budget between chunks; a single chunk can exceed that budget. The writer queue holds up to 256 pending snapshots.
 - Uses the game's `SubChunk::serialize(..., false)` disk format instead of connection-specific block runtime IDs. Missing subchunks are skipped; partial updates retain previously saved subchunks.
-- Sends owned byte buffers to a background writer with uncompressed LevelDB and synchronous atomic batches. Stopping, leaving the world, or disabling the mod closes the session.
+- Sends owned byte buffers to a background writer with uncompressed LevelDB and synchronous atomic batches. A 2 ms coalescing window combines up to 32 snapshots per commit, with a roughly 4 MiB batch target. Stopping, leaving the world, or disabling the mod closes the session.
 
 Only data received by the client can be saved. Unexplored areas are not downloaded. Exported Overworld generation is configured as air-only, so missing Overworld terrain stays empty while saved chunks are preserved. Nether and End generation is independent of this setting. Exports use Creative mode with commands enabled.
 
 Entities, player inventories, scoreboards, map data, scheduled ticks, server plugin data, and resource/behavior packs are not exported. Container contents may not be sent to the client and cannot be guaranteed. Custom blocks require their corresponding packs.
 
-`/wdl save`, `/wdl stop`, and leaving the world wait for disk writes and may briefly pause the game. Queue rejections indicate a full queue; loaded chunks are retried during later scans. Before a chunk is destroyed, a rejected capture waits for pending writes and retries once.
+`/wdl save`, `/wdl stop`, and leaving the world wait for disk writes and may briefly pause the game. They drain pending writes when the queue fills and after capture completes. Normal tick capture pauses while the writer queue is full. Queue rejections indicate a full queue; loaded chunks are retried during later scans. Before a chunk is destroyed, a rejected capture waits for pending writes and retries once. `/wdl status` includes snapshot write and batch counts.
 
 ## Build
 
@@ -95,7 +95,7 @@ ctest --test-dir build/tests -C Release --output-on-failure
 pwsh -File tests/ExportWorldTests.ps1
 ```
 
-Tests cover coordinate/dimension keys, negative heights, `level.dat` headers, void generation settings, database reopening, partial updates, queue pressure, draining on stop, refusing existing world directories, and archive packaging. GitHub Actions builds the client and runs these checks.
+Tests cover coordinate/dimension keys, negative heights, `level.dat` headers, void generation settings, database reopening, partial updates, concurrent batch updates, queue pressure, draining on stop, capture notification coalescing and chunk lifetimes, refusing existing world directories, and archive packaging. GitHub Actions builds the client and runs these checks.
 
 In-game validation is still required: connect to a server, start a capture, explore, change blocks, switch dimensions, stop or disconnect, import the world, and inspect blocks and biomes. Automated tests do not establish runtime hook behavior or actual world-loading compatibility.
 
