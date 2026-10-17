@@ -53,8 +53,12 @@ jobs:
           if ($manifest.dependencies.name -contains 'LeviLamina') {
             throw 'The preloaded LeviLamina loader must not be an ordinary mod dependency.'
           }
-          if ($package.variants[0].dependencies.'github.com/LiteLDev/LeviLamina#client' -cne '26.51.6') {
-            throw 'The package must require the supported LeviLamina client version.'
+          $build = Get-Content xmake.lua -Raw
+          if ($build -notmatch 'LOADER_VERSION\s*=\s*"([^"]+)"') {
+            throw 'xmake.lua must declare LOADER_VERSION.'
+          }
+          if ($package.variants[0].dependencies.'github.com/LiteLDev/LeviLamina#client' -cne $Matches[1]) {
+            throw 'The package must require the same LeviLamina client version as xmake.lua.'
           }
 
       - name: Configure tests

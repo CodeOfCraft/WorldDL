@@ -31,8 +31,8 @@ jobs:
             throw "Release tag must be v$($package.version)."
           }
           $build = Get-Content xmake.lua -Raw
-          if ($build -notmatch ('modVersion\s*=\s*"' + [regex]::Escape($package.version) + '"')) {
-            throw 'xmake modVersion must match tooth.json.'
+          if ($build -notmatch ('MOD_VERSION\s*=\s*"' + [regex]::Escape($package.version) + '"')) {
+            throw 'xmake MOD_VERSION must match tooth.json.'
           }
 
       - uses: xmake-io/github-action-setup-xmake@v1
@@ -69,8 +69,12 @@ jobs:
           if ($manifest.dependencies.name -contains 'LeviLamina') {
             throw 'The preloaded LeviLamina loader must not be an ordinary mod dependency.'
           }
-          if ($package.variants[0].dependencies.'github.com/LiteLDev/LeviLamina#client' -cne '26.51.6') {
-            throw 'The package must require the supported LeviLamina client version.'
+          $build = Get-Content xmake.lua -Raw
+          if ($build -notmatch 'LOADER_VERSION\s*=\s*"([^"]+)"') {
+            throw 'xmake.lua must declare LOADER_VERSION.'
+          }
+          if ($package.variants[0].dependencies.'github.com/LiteLDev/LeviLamina#client' -cne $Matches[1]) {
+            throw 'The package must require the same LeviLamina client version as xmake.lua.'
           }
 
       - name: Configure tests
@@ -126,12 +130,7 @@ jobs:
           name: ${{ github.event.repository.name }}-${{ github.sha }}-${{ matrix.target_type }}-windows-x64
           path: artifact/WorldDL
 
-      - run: |
-          cp CHANGELOG.md LICENSE README.md README.zh-CN.md CONTRIBUTING.md NOTICE.md tooth.json logo.png artifact/
-          cp -r LICENSES artifact/
-          mkdir -p artifact/scripts
-          cp scripts/Export-World.ps1 artifact/scripts/
-
+      # bin/WorldDL/ is already a complete release layout; archive it as-is.
       - run: |
           zip -r ../WorldDL-client-windows-x64.zip .
         working-directory: artifact
