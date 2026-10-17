@@ -12,6 +12,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Coalesce subchunk loading notifications and limit normal tick capture with a time budget.
 - Combine queued snapshots into synchronous LevelDB batches and drain only on queue pressure or final saves.
 - Report snapshot write and batch counts in download status.
+- Split the mod entry into `src/mod`, `src/hooks`, and `src/command`, and keep the session state in one place.
+- Drive packaging from a single file list in `xmake.lua`, so `bin/WorldDL` is a complete release directory and the release job only archives it.
+- Report the manifest and loader versions in the startup log instead of hardcoded strings.
 
 ## [0.1.0]
 
