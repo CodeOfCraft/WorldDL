@@ -6,65 +6,47 @@
 #include <mutex>
 #include <unordered_map>
 
-#include "ll/api/command/CommandHandle.h"
-#include "ll/api/command/CommandRegistrar.h"
+#include "ll/api/Versions.h"
+#include "ll/api/command/Command.h"
 #include "ll/api/event/EventBus.h"
 #include "ll/api/event/command/ClientCommandRegisterEvent.h"
 #include "ll/api/event/world/ClientLevelTickEvent.h"
-#include "ll/api/memory/Hook.h"
 #include "ll/api/mod/RegisterHelper.h"
 #include "ll/api/service/Bedrock.h"
 
 #include "mc/client/game/ClientInstance.h"
 #include "mc/client/multiplayer/ClientLevel.h"
 #include "mc/client/player/LocalPlayer.h"
+#include "mc/server/commands/CommandOutput.h"
 #include "mc/world/level/BlockSource.h"
 #include "mc/world/level/chunk/ChunkSource.h"
 #include "mc/world/level/chunk/LevelChunk.h"
 
-#include "world/ChunkCapture.h"
+#include "command/CommandHandler.h"
+#include "hooks/ChunkHooks.h"
 #include "world/CaptureQueue.h"
+#include "world/ChunkCapture.h"
 
 namespace worlddl {
 
-LL_TYPE_INSTANCE_HOOK(WdlSubChunkHook, ll::memory::HookPriority::Normal, ClientLevel,
-                      &ClientLevel::$onSubChunkLoaded, void, ChunkSource& source, LevelChunk& chunk,
-                      short index, bool visibilityChanged) {
-    origin(source, chunk, index, visibilityChanged);
-    WorldDLMod::getInstance().schedule(source, chunk);
-}
-
-LL_TYPE_INSTANCE_HOOK(WdlChunkDestroyHook, ll::memory::HookPriority::Normal, LevelChunk,
-                      &LevelChunk::$dtor, void) {
-    WorldDLMod::getInstance().capture(*this, true);
-    origin();
-}
-
-LL_TYPE_INSTANCE_HOOK(WdlLeaveHook, ll::memory::HookPriority::Normal, ClientLevel,
-                      &ClientLevel::$startLeaveGame, void) {
-    WorldDLMod::getInstance().leaving(*this);
-    origin();
-}
-
 struct WorldDLMod::Impl {
-    WorldDLMod& mod;
-    std::recursive_mutex mutex;
-    std::unique_ptr<WorldWriter> writer;
-    WriterStatus lastStatus;
-    Level* activeLevel{};
-    bool enabled{};
-    bool captureErrorReported{};
-    int ticks{};
-    int scanIntervalTicks{20};
-    int chunksPerTick{4};
-    std::chrono::microseconds captureBudget{2000};
-    std::size_t queueLimit{256};
+    WorldDLMod&                                  mod;
+    std::recursive_mutex                         mutex;
+    std::unique_ptr<WorldWriter>                 writer;
+    WriterStatus                                 lastStatus;
+    Level*                                       activeLevel{};
+    bool                                         enabled{};
+    bool                                         captureErrorReported{};
+    int                                          ticks{};
+    int                                          scanIntervalTicks{20};
+    int                                          chunksPerTick{4};
+    std::chrono::microseconds                    captureBudget{2000};
+    std::size_t                                  queueLimit{256};
     std::unordered_map<std::string, std::size_t> hashes;
-    CaptureQueue<LevelChunk> loaded;
-    CaptureQueue<LevelChunk> scan;
-    ll::event::ListenerPtr commandListener;
-    ll::event::ListenerPtr tickListener;
-    std::unique_ptr<ll::memory::HookRegistrar<WdlSubChunkHook, WdlChunkDestroyHook, WdlLeaveHook>> hooks;
+    CaptureQueue<LevelChunk>                     loaded;
+    CaptureQueue<LevelChunk>                     scan;
+    ll::event::ListenerPtr                       commandListener;
+    ll::event::ListenerPtr                       tickListener;
 
     explicit Impl(WorldDLMod& owner) : mod(owner) {}
 
@@ -105,8 +87,11 @@ struct WorldDLMod::Impl {
         if (writer) {
             writer->stop();
             lastStatus = writer->status();
-            mod.getSelf().getLogger().info("WorldDL saved {} chunks to {}",
-                                           lastStatus.chunks, lastStatus.directory.string());
+            mod.getSelf().getLogger().info(
+                "WorldDL saved {} chunks to {}",
+                lastStatus.chunks,
+                lastStatus.directory.string()
+            );
             if (!lastStatus.error.empty()) {
                 mod.getSelf().getLogger().error("WorldDL write failed: {}", lastStatus.error);
             }
@@ -140,19 +125,21 @@ struct WorldDLMod::Impl {
             auto const root = mod.getSelf().getDataDir() / "worlds";
             std::filesystem::create_directories(root);
             auto const timestamp = std::chrono::duration_cast<std::chrono::milliseconds>(
-                std::chrono::system_clock::now().time_since_epoch()).count();
-            auto directory = root / ("wdl_" + std::to_string(timestamp));
+                                       std::chrono::system_clock::now().time_since_epoch()
+            )
+                                       .count();
+            auto       directory = root / ("wdl_" + std::to_string(timestamp));
             for (unsigned int suffix = 1; std::filesystem::exists(directory); ++suffix) {
                 directory = root / ("wdl_" + std::to_string(timestamp) + "_" + std::to_string(suffix));
             }
             auto metadata = captureMetadata(*client->getLevel(), *client->getLocalPlayer(), name);
-            writer = std::make_unique<WorldWriter>(directory, name, metadata, queueLimit);
-            activeLevel = client->getLevel();
+            writer        = std::make_unique<WorldWriter>(directory, name, metadata, queueLimit);
+            activeLevel   = client->getLevel();
             hashes.clear();
             loaded.clear();
             scan.clear();
             captureErrorReported = false;
-            ticks = scanIntervalTicks - 1;
+            ticks                = scanIntervalTicks - 1;
             discover();
             output.success("WorldDL started: " + directory.string());
         } catch (std::exception const& error) {
@@ -163,57 +150,45 @@ struct WorldDLMod::Impl {
 
     void showStatus(CommandOutput& output) {
         std::lock_guard lock(mutex);
-        auto const state = writer ? writer->status() : lastStatus;
-        output.success(std::string(writer ? "Recording" : "Stopped") + ": "
-                       + std::to_string(state.chunks) + " chunks, " + std::to_string(state.pending)
-                       + " queued, " + std::to_string(state.rejected) + " queue rejections, "
-                       + std::to_string(state.writes) + " writes in " + std::to_string(state.batches) + " batches.\n"
-                       + state.directory.string());
+        auto const      state = writer ? writer->status() : lastStatus;
+        output.success(
+            std::string(writer ? "Recording" : "Stopped") + ": " + std::to_string(state.chunks) + " chunks, "
+            + std::to_string(state.pending) + " queued, " + std::to_string(state.rejected) + " queue rejections, "
+            + std::to_string(state.writes) + " writes in " + std::to_string(state.batches) + " batches.\n"
+            + state.directory.string()
+        );
         if (!state.error.empty()) {
             output.error("Storage error: " + state.error);
         }
     }
 
-    void registerCommands() {
-        auto& command = ll::command::CommandRegistrar::getClientInstance().getOrCreateCommand(
-            "wdl", "WorldDL", CommandPermissionLevel::Any);
-        command.overload().execute([this](CommandOrigin const&, CommandOutput& output) { showStatus(output); });
-        command.overload().text("status").execute(
-            [this](CommandOrigin const&, CommandOutput& output) { showStatus(output); });
-        command.overload().text("start").execute(
-            [this](CommandOrigin const&, CommandOutput& output) { start({}, output); });
-        struct StartParams { std::string name; };
-        command.overload<StartParams>().text("start").required("name").execute(
-            [this](CommandOrigin const&, CommandOutput& output, StartParams const& params) {
-                start(params.name, output);
-            });
-        command.overload().text("save").execute([this](CommandOrigin const&, CommandOutput& output) {
-            std::lock_guard lock(mutex);
-            if (!writer) {
-                output.error("No download is running.");
-                return;
-            }
-            captureAll();
-            if (writer->flush()) {
-                output.success("WorldDL saved: " + writer->status().directory.string());
-            } else {
-                output.error("Storage error: " + writer->status().error);
-            }
-        });
-        command.overload().text("stop").execute([this](CommandOrigin const&, CommandOutput& output) {
-            std::lock_guard lock(mutex);
-            if (!writer) {
-                output.error("No download is running.");
-                return;
-            }
-            captureAll();
-            stop();
-            if (lastStatus.error.empty()) {
-                output.success("WorldDL stopped: " + lastStatus.directory.string());
-            } else {
-                output.error("Storage error: " + lastStatus.error);
-            }
-        });
+    void save(CommandOutput& output) {
+        std::lock_guard lock(mutex);
+        if (!writer) {
+            output.error("No download is running.");
+            return;
+        }
+        captureAll();
+        if (writer->flush()) {
+            output.success("WorldDL saved: " + writer->status().directory.string());
+        } else {
+            output.error("Storage error: " + writer->status().error);
+        }
+    }
+
+    void stopSession(CommandOutput& output) {
+        std::lock_guard lock(mutex);
+        if (!writer) {
+            output.error("No download is running.");
+            return;
+        }
+        captureAll();
+        stop();
+        if (lastStatus.error.empty()) {
+            output.success("WorldDL stopped: " + lastStatus.directory.string());
+        } else {
+            output.error("Storage error: " + lastStatus.error);
+        }
     }
 
     void tick(Level& level) {
@@ -258,13 +233,17 @@ WorldDLMod& WorldDLMod::getInstance() {
     return instance;
 }
 
-WorldDLMod::WorldDLMod()
-: mImpl(std::make_unique<Impl>(*this)), mSelf(*ll::mod::NativeMod::current()) {}
+WorldDLMod::WorldDLMod() : mImpl(std::make_unique<Impl>(*this)), mSelf(*ll::mod::NativeMod::current()) {}
 
 WorldDLMod::~WorldDLMod() = default;
 
 bool WorldDLMod::load() {
-    getSelf().getLogger().info("WorldDL 0.1.0 - LeviLamina 26.51.6 client");
+    auto const& manifest = getSelf().getManifest();
+    getSelf().getLogger().info(
+        "WorldDL {} - LeviLamina {} client",
+        manifest.version ? manifest.version->to_string() : std::string{"unknown"},
+        ll::getLoaderVersion().to_string()
+    );
     return true;
 }
 
@@ -274,14 +253,14 @@ bool WorldDLMod::enable() {
         return true;
     }
     mImpl->enabled = true;
-    auto& bus = ll::event::EventBus::getInstance();
-    mImpl->commandListener = bus.emplaceListener<ll::event::ClientCommandRegisterEvent>(
-        [this](auto&) { mImpl->registerCommands(); });
-    mImpl->tickListener = bus.emplaceListener<ll::event::ClientLevelTickEvent>(
-        [this](auto& event) { mImpl->tick(event.level()); });
-    mImpl->hooks = std::make_unique<ll::memory::HookRegistrar<WdlSubChunkHook, WdlChunkDestroyHook, WdlLeaveHook>>();
+    auto& bus      = ll::event::EventBus::getInstance();
+    mImpl->commandListener =
+        bus.emplaceListener<ll::event::ClientCommandRegisterEvent>([this](auto&) { registerCommands(*this); });
+    mImpl->tickListener =
+        bus.emplaceListener<ll::event::ClientLevelTickEvent>([this](auto& event) { mImpl->tick(event.level()); });
+    hooks::install();
     if (ll::service::getCommandRegistry(true)) {
-        mImpl->registerCommands();
+        registerCommands(*this);
     }
     return true;
 }
@@ -296,7 +275,7 @@ bool WorldDLMod::disable() {
         bus.removeListener(mImpl->tickListener);
         mImpl->tickListener.reset();
     }
-    mImpl->hooks.reset();
+    hooks::uninstall();
     std::lock_guard lock(mImpl->mutex);
     mImpl->enabled = false;
     mImpl->stop();
@@ -304,6 +283,14 @@ bool WorldDLMod::disable() {
 }
 
 bool WorldDLMod::unload() { return disable(); }
+
+void WorldDLMod::startSession(std::string name, CommandOutput& output) { mImpl->start(std::move(name), output); }
+
+void WorldDLMod::showStatus(CommandOutput& output) { mImpl->showStatus(output); }
+
+void WorldDLMod::saveSession(CommandOutput& output) { mImpl->save(output); }
+
+void WorldDLMod::stopSession(CommandOutput& output) { mImpl->stopSession(output); }
 
 void WorldDLMod::schedule(ChunkSource& source, LevelChunk& chunk) noexcept {
     std::lock_guard lock(mImpl->mutex);
@@ -334,7 +321,7 @@ void WorldDLMod::capture(LevelChunk& chunk, bool ensureQueued) noexcept {
     }
     try {
         if (auto snapshot = captureChunk(chunk)) {
-            auto const hash = snapshotHash(*snapshot);
+            auto const hash  = snapshotHash(*snapshot);
             auto const found = mImpl->hashes.find(snapshot->identity);
             if (found != mImpl->hashes.end() && found->second == hash) {
                 return;
